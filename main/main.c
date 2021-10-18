@@ -7,6 +7,7 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_camera.h"
+#include "esp_http_server.h"
 
 #define TAG "app_main"
 
@@ -44,7 +45,7 @@ static camera_config_t camera_config = {
         .fb_count = 1 //if more than one, i2s runs in continuous mode. Use only with JPEG
 };
 
-esp_err_t esp32cam_camera_init() {
+static esp_err_t esp32cam_camera_init() {
     // Power up the camera by setting the power pin high
     if(CAM_PWR_PIN != -1){
         esp_err_t err = gpio_set_direction(CAM_PWR_PIN, GPIO_MODE_OUTPUT);
@@ -69,6 +70,51 @@ esp_err_t esp32cam_camera_init() {
     return ESP_OK;
 }
 
+static esp_err_t index_get_handler(httpd_req_t *req) {
+    // Acquire a frame by requesting a frame buffer
+    camera_fb_t * fb = esp_camera_fb_get();
+    if (!fb) {
+        ESP_LOGE(TAG, "Camera Capture Failed");
+        return ESP_FAIL;
+    }
+
+    // Send the frame buffer with content type jpeg to the client
+    httpd_resp_set_hdr(req, "Content-Type", "image/jpeg");
+    httpd_resp_send(req, (char *)fb->buf, (ssize_t)fb->len);
+
+    // Return the frame buffer back to the driver for reuse
+    esp_camera_fb_return(fb);
+
+    return ESP_OK;
+}
+
+static esp_err_t esp32cam_start_http_server(httpd_handle_t *handle) {
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+    esp_err_t err = httpd_start(handle, &config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed start webserver");
+        return err;
+    }
+
+    static const httpd_uri_t index_get = {
+            .uri       = "/index.html",
+            .method    = HTTP_GET,
+            .handler   = index_get_handler,
+            .user_ctx  = NULL
+    };
+
+    err = httpd_register_uri_handler(&handle, &index_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed set handler");
+        httpd_stop(&handle);
+        handle = NULL;
+        return err;
+    }
+
+    return ESP_OK;
+}
+
 void app_main(void)
 {
     // Initialize NVS.
@@ -85,6 +131,10 @@ void app_main(void)
 
     // Initialize Camera
     ESP_ERROR_CHECK(esp32cam_camera_init());
+
+    // Initialize HTTP Server
+    httpd_handle_t server;
+    ESP_ERROR_CHECK(esp32cam_start_http_server(&server));
 
     int i = 0;
     while (1) {
