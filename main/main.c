@@ -63,7 +63,7 @@ static camera_config_t camera_config = {
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t s_wifi_event_group;
 
-#ifdef USE_SMART_CONFIG
+#ifdef CONFIG_ESPCAM_WIFI_CRED_SMARTCONFIG
 static void smartconfig_example_task(void * parm)
 {
     EventBits_t uxBits;
@@ -88,25 +88,20 @@ static void event_handler(void* arg, esp_event_base_t event_base,
                           int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-#ifndef USE_SMART_CONFIG
+#ifdef CONFIG_ESPCAM_WIFI_CRED_STATIC
         ESP_LOGI(TAG, "Using preconfigured WiFi credentials");
         wifi_config_t wifi_config;
         bzero(&wifi_config, sizeof(wifi_config_t));
-        memcpy(wifi_config.sta.ssid, "SparkNet", 8);
-        memcpy(wifi_config.sta.password, "wirelessrocks", 13);
-        wifi_config.sta.bssid[0] = 0xb8;
-        wifi_config.sta.bssid[1] = 0x8d;
-        wifi_config.sta.bssid[2] = 0x12;
-        wifi_config.sta.bssid[3] = 0x5f;
-        wifi_config.sta.bssid[4] = 0x0c;
-        wifi_config.sta.bssid[5] = 0x4f;
-        wifi_config.sta.bssid_set = true;
+        memcpy(wifi_config.sta.ssid, CONFIG_ESPCAM_WIFI_SSID, strlen(CONFIG_ESPCAM_WIFI_SSID));
+        memcpy(wifi_config.sta.password, CONFIG_ESPCAM_WIFI_PASSWORD, strlen(CONFIG_ESPCAM_WIFI_PASSWORD));
         ESP_ERROR_CHECK( esp_wifi_disconnect() );
         ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
         esp_wifi_connect();
-#else
+#elif defined CONFIG_ESPCAM_WIFI_CRED_SMARTCONFIG
         ESP_LOGI(TAG, "Using SmartConfig to obtain credentials");
         xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
+#else
+#error  No wifi credentials source defined
 #endif
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         esp_wifi_connect();
@@ -287,10 +282,13 @@ static esp_err_t esp32cam_start_http_server(httpd_handle_t *handle) {
         return err;
     }
 
-    ESP_LOGI(TAG, "Available URI handlers: %d", config.max_uri_handlers);
     err = httpd_register_uri_handler(*handle, &index_get);
-    err = httpd_register_uri_handler(*handle, &css_get);
-    err = httpd_register_uri_handler(*handle, &frame_get);
+    if (err == ESP_OK) {
+        err = httpd_register_uri_handler(*handle, &css_get);
+    }
+    if (err == ESP_OK) {
+        err = httpd_register_uri_handler(*handle, &frame_get);
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed set handler");
         httpd_stop(&handle);
@@ -315,7 +313,7 @@ void app_main(void)
     ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_direction(BUILTIN_LED_PIN, GPIO_MODE_OUTPUT));
     ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_level(BUILTIN_LED_PIN, GPIO_LOW));
 
-    // Init Wifi (with smartconfig)
+    // Init WiFi (with SmartConfig)
     ESP_ERROR_CHECK(esp32cam_initialise_wifi());
 
     // Initialize Camera
@@ -325,10 +323,11 @@ void app_main(void)
     httpd_handle_t server;
     ESP_ERROR_CHECK(esp32cam_start_http_server(&server));
 
-    int i = 0;
+    size_t clients = 0;
+    int ids[16];
     while (1) {
-        printf("[%d] Hello world!\n", i);
-        i++;
+        httpd_get_client_list(server, &clients, (int *)&ids);
+        printf("Http clients connected: %d\n", clients);
         vTaskDelay(5000 / portTICK_PERIOD_MS);
     }
 }
