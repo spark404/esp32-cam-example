@@ -207,7 +207,7 @@ static const char* STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" P
 static const char* STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
 static const char* STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
-static esp_err_t frame_get_handler(httpd_req_t *req) {
+static esp_err_t stream_get_handler(httpd_req_t *req) {
     char *part_buf[64];
     httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
 
@@ -235,6 +235,28 @@ static esp_err_t frame_get_handler(httpd_req_t *req) {
             ESP_LOGW(TAG, "Failed to send stream chunk");
             break;
         }
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t frame_get_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "image/jpeg");
+
+    // Acquire a frame by requesting a frame buffer
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        ESP_LOGE(TAG, "Camera Capture Failed");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = httpd_resp_send(req, (char *)fb->buf, (ssize_t)fb->len);
+
+    // Return the frame buffer back to the driver for reuse
+    esp_camera_fb_return(fb);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to send frame buffer");
+        return ESP_FAIL;
     }
 
     return ESP_OK;
@@ -272,6 +294,13 @@ static const httpd_uri_t frame_get = {
         .user_ctx  = NULL
 };
 
+static const httpd_uri_t stream_get = {
+        .uri       = "/stream",
+        .method    = HTTP_GET,
+        .handler   = stream_get_handler,
+        .user_ctx  = NULL
+};
+
 static esp_err_t esp32cam_start_http_server(httpd_handle_t *handle) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
@@ -288,6 +317,9 @@ static esp_err_t esp32cam_start_http_server(httpd_handle_t *handle) {
     }
     if (err == ESP_OK) {
         err = httpd_register_uri_handler(*handle, &frame_get);
+    }
+    if (err == ESP_OK) {
+        err = httpd_register_uri_handler(*handle, &stream_get);
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed set handler");
